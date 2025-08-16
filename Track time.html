@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Product Time Tracker</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        input { width: 120px; margin-right: 10px; }
+        table { border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #aaa; padding: 5px 10px; text-align: center; }
+        button { margin-top: 10px; margin-right: 5px; }
+    </style>
+</head>
+<body>
+    <h1>Product Time Tracker</h1>
+
+    <label for="steps">Number of Steps:</label>
+    <input type="number" id="steps" value="4" min="1">
+    <button id="generateBtn">Generate Table</button>
+
+    <div id="tableContainer"></div>
+    <button id="calculateBtn">Calculate Times</button>
+    <button id="exportBtn">Export to CSV</button>
+    <button id="sendToSheetBtn">Send to Google Sheet</button>
+
+    <h2>Results</h2>
+    <div id="results"></div>
+
+    <script>
+        const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzDw7kI0CTQwEX5l3uvU5unw7wkW2G-btjwRcz-kXCGg-lwBmSyhuzy7-cj19gm3f0ayw/exec"; // Replace with your Apps Script URL
+
+        // Generate table
+        function generateTable() {
+            const container = document.getElementById('tableContainer');
+            container.innerHTML = '';
+            const steps = parseInt(document.getElementById('steps').value);
+            if (isNaN(steps) || steps < 1) { alert('Enter valid number of steps.'); return; }
+
+            const table = document.createElement('table');
+            const header = document.createElement('tr');
+            header.innerHTML = '<th>Step</th><th>Start Time</th><th>End Time</th>';
+            table.appendChild(header);
+
+            for (let i = 1; i <= steps; i++) {
+                const row = document.createElement('tr');
+                row.innerHTML = `<td>Step ${i}</td>
+                                 <td><input type="text" id="start${i}" placeholder="e.g. 8 or 8:30"></td>
+                                 <td><input type="text" id="end${i}" placeholder="e.g. 4 or 16:00"></td>`;
+                table.appendChild(row);
+            }
+            container.appendChild(table);
+        }
+
+        // Parse time with automatic PM logic
+        function parseTime(timeStr) {
+            timeStr = timeStr.trim();
+            if (timeStr === '') return 0;
+
+            const parts = timeStr.split(':');
+            let hours = parseInt(parts[0]);
+            let minutes = 0;
+            if (parts.length === 2) minutes = parseInt(parts[1]) || 0;
+            if (isNaN(hours)) throw 'Invalid hour input';
+
+            // Automatic PM: 6–12 or 1 = PM
+            if ((hours >= 6 && hours <= 12) || hours === 1) hours += 12;
+            if (hours === 24) hours = 12;
+
+            return hours * 60 + minutes;
+        }
+
+        // Calculate durations
+        function calculateTimes() {
+            const steps = parseInt(document.getElementById('steps').value);
+            if (isNaN(steps) || steps < 1) { alert('Enter valid steps'); return; }
+
+            let totalMinutes = 0;
+            let resultsHTML = '<table><tr><th>Step</th><th>Duration (minutes)</th></tr>';
+
+            for (let i = 1; i <= steps; i++) {
+                const startStr = document.getElementById(`start${i}`).value || '0';
+                const endStr = document.getElementById(`end${i}`).value || '0';
+                let start = parseTime(startStr);
+                let end = parseTime(endStr);
+                if (end < start) end += 24*60;
+
+                const duration = end - start;
+                totalMinutes += duration;
+                resultsHTML += `<tr><td>Step ${i}</td><td>${duration}</td></tr>`;
+            }
+
+            resultsHTML += `<tr><td><strong>Total</strong></td><td><strong>${totalMinutes}</strong></td></tr></table>`;
+            document.getElementById('results').innerHTML = resultsHTML;
+        }
+
+        // Export CSV
+        function exportToCSV() {
+            const steps = parseInt(document.getElementById('steps').value);
+            let csvContent = 'Step,Start,End,Duration (minutes)\n';
+            let total = 0;
+
+            for (let i = 1; i <= steps; i++) {
+                const startStr = document.getElementById(`start${i}`).value || '0';
+                const endStr = document.getElementById(`end${i}`).value || '0';
+                let start = parseTime(startStr);
+                let end = parseTime(endStr);
+                if (end < start) end += 24*60;
+                const duration = end - start;
+                total += duration;
+                csvContent += `Step ${i},${startStr},${endStr},${duration}\n`;
+            }
+            csvContent += `Total,, ,${total}\n`;
+
+            const blob = new Blob([csvContent], {type: 'text/csv;charset=utf-8;'});
+            const link = document.createElement('a');
+            link.setAttribute('href', URL.createObjectURL(blob));
+            link.setAttribute('download', 'time_tracking.csv');
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        // Send to Google Sheet
+        async function sendToGoogleSheet() {
+            const steps = parseInt(document.getElementById('steps').value);
+            if (isNaN(steps) || steps < 1) { alert('Enter valid steps'); return; }
+
+            let data = [];
+            for (let i = 1; i <= steps; i++) {
+                const startStr = document.getElementById(`start${i}`).value || '0';
+                const endStr = document.getElementById(`end${i}`).value || '0';
+                let start = parseTime(startStr);
+                let end = parseTime(endStr);
+                if (end < start) end += 24*60;
+                const duration = end - start;
+
+                data.push({step: `Step ${i}`, start: startStr, end: endStr, duration});
+            }
+
+            try {
+                const response = await fetch(WEB_APP_URL, {
+                    method: "POST",
+                    body: JSON.stringify(data),
+                    headers: { "Content-Type": "application/json" }
+                });
+                if (!response.ok) throw `HTTP error ${response.status}`;
+                const result = await response.json();
+                alert("Data sent: " + result.status);
+            } catch (err) {
+                alert("Error sending data: " + err);
+            }
+        }
+
+        document.getElementById('generateBtn').addEventListener('click', generateTable);
+        document.getElementById('calculateBtn').addEventListener('click', calculateTimes);
+        document.getElementById('exportBtn').addEventListener('click', exportToCSV);
+        document.getElementById('sendToSheetBtn').addEventListener('click', sendToGoogleSheet);
+    </script>
+</body>
+</html>

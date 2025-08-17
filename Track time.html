@@ -1,18 +1,20 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Product Time Tracker</title>
+  <title>Multi-Person Product Time Tracker</title>
   <style>
     body { font-family: Arial; padding: 20px; }
-    input { width: 100px; margin-right: 5px; }
+    input { width: 80px; margin-right: 5px; }
     table { border-collapse: collapse; margin-top: 20px; }
     th, td { border: 1px solid #aaa; padding: 5px 10px; text-align: center; }
     button { margin: 5px; }
   </style>
 </head>
 <body>
-  <h1>Product Time Tracker</h1>
+  <h1>Multi-Person Product Time Tracker</h1>
 
+  <label for="people">Number of People:</label>
+  <input type="number" id="people" value="2" min="1">
   <label for="steps">Number of Steps:</label>
   <input type="number" id="steps" value="4" min="1">
   <button id="generateBtn">Generate Table</button>
@@ -25,80 +27,122 @@
   <div id="results"></div>
 
   <script>
-    // Generate table
+    const WORKDAY_START = 8 * 60;   // 8:00 AM
+    const WORKDAY_END = 18 * 60;    // 6:00 PM
+
     function generateTable() {
       const container = document.getElementById('tableContainer');
       container.innerHTML = '';
+      const people = parseInt(document.getElementById('people').value);
       const steps = parseInt(document.getElementById('steps').value);
-      if (!steps || steps < 1) { alert('Enter valid steps'); return; }
+      if (!people || !steps || people < 1 || steps < 1) { alert('Enter valid numbers'); return; }
 
-      const table = document.createElement('table');
-      const header = document.createElement('tr');
-      header.innerHTML = '<th>Step</th><th>Start</th><th>End</th>';
-      table.appendChild(header);
+      for (let p = 1; p <= people; p++) {
+        const title = document.createElement('h3');
+        title.textContent = `Person ${p}`;
+        container.appendChild(title);
 
-      for (let i=1;i<=steps;i++){
-        const row = document.createElement('tr');
-        row.innerHTML = `<td>Step ${i}</td>
-                         <td><input id="start${i}" placeholder="e.g. 8 or 8:30"></td>
-                         <td><input id="end${i}" placeholder="e.g. 4 or 16:00"></td>`;
-        table.appendChild(row);
+        const table = document.createElement('table');
+        const header = document.createElement('tr');
+        header.innerHTML = '<th>Step</th><th>Start</th><th>End</th><th>Break (min)</th>';
+        table.appendChild(header);
+
+        for (let s = 1; s <= steps; s++) {
+          const row = document.createElement('tr');
+          row.innerHTML = `<td>Step ${s}</td>
+            <td><input id="p${p}s${s}start" placeholder="8:00"></td>
+            <td><input id="p${p}s${s}end" placeholder="10:00"></td>
+            <td><input id="p${p}s${s}break" placeholder="0"></td>`;
+          table.appendChild(row);
+        }
+        container.appendChild(table);
       }
-      container.appendChild(table);
     }
 
-    // Parse time with automatic PM logic
     function parseTime(str) {
       str = str.trim();
-      if (!str) return 0;
+      if (!str) throw 'Time required';
       const parts = str.split(':');
       let hours = parseInt(parts[0]);
       let minutes = parts[1] ? parseInt(parts[1]) : 0;
-      if (isNaN(hours)) throw 'Invalid hour';
-      if ((hours >= 6 && hours <= 12) || hours === 1) hours += 12;
-      if (hours === 24) hours = 12;
-      return hours*60 + minutes;
+      if (isNaN(hours) || isNaN(minutes)) throw 'Invalid time';
+      if (hours < 8) hours += 12;  
+      const totalMinutes = hours*60 + minutes;
+      if (totalMinutes < WORKDAY_START) throw 'Time before workday start';
+      if (totalMinutes > WORKDAY_END) throw 'Time after workday end';
+      return totalMinutes;
     }
 
-    // Calculate durations and total
     function calculateTimes() {
+      const people = parseInt(document.getElementById('people').value);
       const steps = parseInt(document.getElementById('steps').value);
-      let total=0;
-      let html='<table><tr><th>Step</th><th>Duration (min)</th></tr>';
-      for (let i=1;i<=steps;i++){
-        const start = parseTime(document.getElementById(`start${i}`).value || '0');
-        let end = parseTime(document.getElementById(`end${i}`).value || '0');
-        if (end < start) end += 24*60; // overnight
-        const duration = end - start;
-        total += duration;
-        html += `<tr><td>Step ${i}</td><td>${duration}</td></tr>`;
+      let resultsHTML = '';
+
+      for (let p = 1; p <= people; p++) {
+        let totalMinutes = 0;
+        let html = `<h3>Person ${p}</h3><table><tr><th>Step</th><th>Duration (hours)</th></tr>`;
+        for (let s = 1; s <= steps; s++) {
+          try {
+            const startStr = document.getElementById(`p${p}s${s}start`).value || '';
+            const endStr = document.getElementById(`p${p}s${s}end`).value || '';
+            const breakStr = document.getElementById(`p${p}s${s}break`).value || '0';
+
+            let start = parseTime(startStr);
+            let end = parseTime(endStr);
+            if (end < start) throw 'End time cannot be before start time';
+            const breakTime = parseInt(breakStr) || 0;
+
+            const durationHours = Math.max(0, (end - start - breakTime)/60).toFixed(2);
+            totalMinutes += (end - start - breakTime);
+            html += `<tr><td>Step ${s}</td><td>${durationHours}</td></tr>`;
+          } catch(e) {
+            html += `<tr><td>Step ${s}</td><td style="color:red;">${e}</td></tr>`;
+          }
+        }
+        const totalHours = (totalMinutes/60).toFixed(2);
+        html += `<tr><td><b>Total (hours)</b></td><td><b>${totalHours}</b></td></tr></table>`;
+        resultsHTML += html;
       }
-      html += `<tr><td><b>Total</b></td><td><b>${total}</b></td></tr></table>`;
-      document.getElementById('results').innerHTML = html;
+
+      document.getElementById('results').innerHTML = resultsHTML;
     }
 
-    // Export CSV
     function exportCSV() {
+      const people = parseInt(document.getElementById('people').value);
       const steps = parseInt(document.getElementById('steps').value);
-      let csv='Step,Start,End,Duration\n';
-      let total=0;
-      for(let i=1;i<=steps;i++){
-        const start = parseTime(document.getElementById(`start${i}`).value||'0');
-        let end = parseTime(document.getElementById(`end${i}`).value||'0');
-        if(end < start) end+=24*60;
-        const duration = end - start;
-        total+=duration;
-        csv += `Step ${i},${document.getElementById(`start${i}`).value||'0'},${document.getElementById(`end${i}`).value||'0'},${duration}\n`;
+      let csv = 'Person,Step,Start,End,Break (min),Duration (hours)\n';
+
+      for (let p = 1; p <= people; p++) {
+        let totalMinutes = 0;
+        for (let s = 1; s <= steps; s++) {
+          try {
+            const startStr = document.getElementById(`p${p}s${s}start`).value || '';
+            const endStr = document.getElementById(`p${p}s${s}end`).value || '';
+            const breakStr = document.getElementById(`p${p}s${s}break`).value || '0';
+
+            let start = parseTime(startStr);
+            let end = parseTime(endStr);
+            if (end < start) throw 'End before start';
+            const breakTime = parseInt(breakStr) || 0;
+            const durationHours = Math.max(0, (end - start - breakTime)/60).toFixed(2);
+            totalMinutes += (end - start - breakTime);
+
+            csv += `Person ${p},Step ${s},${startStr},${endStr},${breakStr},${durationHours}\n`;
+          } catch(e) {
+            csv += `Person ${p},Step ${s},ERROR,ERROR,0,0\n`;
+          }
+        }
+        const totalHours = (totalMinutes/60).toFixed(2);
+        csv += `Person ${p},Total,,, ,${totalHours}\n`;
       }
-      csv += `Total,, ,${total}\n`;
+
       const blob = new Blob([csv], {type:'text/csv'});
-      const link=document.createElement('a');
-      link.href=URL.createObjectURL(blob);
-      link.download='time_tracking.csv';
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'time_tracking.csv';
       link.click();
     }
 
-    // Event listeners
     document.getElementById('generateBtn').addEventListener('click', generateTable);
     document.getElementById('calculateBtn').addEventListener('click', calculateTimes);
     document.getElementById('exportBtn').addEventListener('click', exportCSV);

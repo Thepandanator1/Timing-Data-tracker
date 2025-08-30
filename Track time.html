@@ -25,19 +25,23 @@ textarea.noteInput { width: 100px; height: 20px; }
   <label>Batch:</label>
   <input type="text" id="tableTitle" placeholder="6-12 72 Odyssey x10" />
 
-  <h3>Workers and Assigned Batteries (comma-separated):</h3>
+  <h3>Workers & Assigned Batteries (comma-separated):</h3>
   <div id="nameContainer">
     <div class="person-row">
-      <input type="text" placeholder="Worker 1 Name" class="personName">
+      <input type="text" placeholder="Name" class="personName">
       <input type="text" placeholder="Batteries" class="workerNumbers">
     </div>
     <div class="person-row">
-      <input type="text" placeholder="Worker 2 Name" class="personName">
+      <input type="text" placeholder="Name" class="personName">
+      <input type="text" placeholder="Batteries" class="workerNumbers">
+    </div>
+    <div class="person-row">
+      <input type="text" placeholder="Name" class="personName">
       <input type="text" placeholder="Batteries" class="workerNumbers">
     </div>
   </div>
-  <button id="addPersonBtn">Add Another Worker</button>
-  <button id="removePersonBtn">Remove Last Worker</button>
+  <button id="addPersonBtn">Add Worker</button>
+  <button id="removePersonBtn">Remove Worker</button>
   <button id="generateBtn" style="margin-top:10px;">Generate Table</button>
 </div>
 
@@ -52,27 +56,34 @@ textarea.noteInput { width: 100px; height: 20px; }
 <div id="results"></div>
 
 <script>
-const stepNames = ['Wire','Detail'];
-const dayAbbr = ['M','Tu','W','Th','F','Sa','Su'];
+const dayIndexMap = { M:0, Tu:1, W:2, Th:3, F:4, Sa:5, Su:6 };
 
+/* ---------- TIME PARSING ---------- */
 function parseTimeWithDay(input){
-  const parts = input.trim().split(/\s+/);
-  if(parts.length!==2) throw 'Time must include day abbreviation (e.g., 8:20 M)';
-  const timePart = parts[0];
-  const dayPart = parts[1];
-  const dayIndex = dayAbbr.indexOf(dayPart);
-  if(dayIndex===-1) throw 'Invalid day abbreviation';
+  const trimmed = input.trim();
+  const m = trimmed.match(/^(\d{1,2})(?::(\d{1,2}))?\s*(am|pm|a|p)?\s+(M|Tu|W|Th|F|Sa|Su)$/i);
+  if(!m) throw 'Time must be like "11:54 Tu" or "1:10pm Th"';
+  let h = parseInt(m[1],10);
+  let min = m[2] !== undefined ? parseInt(m[2],10) : 0;
+  const suffix = m[3] ? m[3].toLowerCase() : null;
+  const dayStr = m[4];
+  const dIdx = dayIndexMap[dayStr];
+  if(dIdx === undefined) throw 'Invalid day abbreviation';
+  if(isNaN(h) || isNaN(min) || min<0 || min>59) throw 'Invalid time';
 
-  const hm = timePart.split(':');
-  let hours = parseInt(hm[0],10);
-  let minutes = hm[1]!==undefined && hm[1]!==''
-                ? parseInt(hm[1],10)
-                : 0;
-  if(isNaN(hours)||isNaN(minutes)) throw 'Invalid time';
-  if(hours<0||hours>23||minutes<0||minutes>59) throw 'Time out of range';
-  if(hours>=1 && hours<=6) hours+=12; // auto-PM for 1-6
+  if(suffix){
+    if(h < 1 || h > 12) throw 'Invalid 12h time';
+    if(suffix === 'am' || suffix === 'a'){
+      if(h === 12) h = 0;
+    }else{
+      if(h !== 12) h += 12;
+    }
+  }else{
+    if(h < 0 || h > 23) throw 'Time out of range';
+    if(h >= 1 && h <= 6) h += 12; // assume PM for 1..6
+  }
 
-  return { totalMinutes: dayIndex*24*60 + hours*60 + minutes, dayIndex };
+  return { totalMinutes: dIdx*1440 + h*60 + min, dayIndex: dIdx };
 }
 
 function parseHourMinute(input){
@@ -91,12 +102,52 @@ function formatHoursMinutes(totalMinutes){
   return `${hours}:${minutes.toString().padStart(2,'0')}`;
 }
 
-const addBtn=document.getElementById('addPersonBtn');
-const removeBtn=document.getElementById('removePersonBtn');
-const calculateBtn=document.getElementById('calculateBtn');
-const exportBtn=document.getElementById('exportBtn');
+/* ---------- SHIFT-AWARE DURATION ---------- */
+function calculateShiftDuration(startObj, endObj) {
+  const shiftStart = 8 * 60;     // 8:00
+  const shiftEnd = 16 * 60 + 30; // 16:30
+  const shiftLength = shiftEnd - shiftStart; // 510 min
 
-addBtn.addEventListener('click',()=>{
+  let startDay = startObj.dayIndex;
+  let endDay = endObj.dayIndex;
+  let startMin = startObj.totalMinutes % 1440;
+  let endMin = endObj.totalMinutes % 1440;
+
+  let daysDiff = endDay - startDay;
+  if (daysDiff < 0) daysDiff += 7; // handle Fri->Mon, etc.
+
+  let total = 0;
+
+  // Same-day case
+  if (daysDiff === 0) {
+    const s = Math.max(startMin, shiftStart);
+    const e = Math.min(endMin, shiftEnd);
+    return Math.max(0, e - s);
+  }
+
+  // First day
+  total += Math.max(0, shiftEnd - Math.max(startMin, shiftStart));
+
+  // Full days in between
+  for (let i = 1; i < daysDiff; i++) {
+    const day = (startDay + i) % 7;
+    if (day <= 4) total += shiftLength; // weekdays only
+  }
+
+  // Last day
+  total += Math.max(0, Math.min(endMin, shiftEnd) - shiftStart);
+
+  return total;
+}
+
+/* ---------- CSV FIELD ESCAPING ---------- */
+function csvField(val){
+  const s = (val ?? '').toString();
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+/* ---------- UI BUTTONS ---------- */
+document.getElementById('addPersonBtn').addEventListener('click',()=>{
   const nc=document.getElementById('nameContainer');
   const idx=nc.querySelectorAll('.person-row').length+1;
   const div=document.createElement('div');
@@ -106,7 +157,7 @@ addBtn.addEventListener('click',()=>{
   nc.appendChild(div);
 });
 
-removeBtn.addEventListener('click',()=>{
+document.getElementById('removePersonBtn').addEventListener('click',()=>{
   const nc=document.getElementById('nameContainer');
   const rows=nc.querySelectorAll('.person-row');
   if(rows.length>1) nc.removeChild(rows[rows.length-1]);
@@ -114,14 +165,15 @@ removeBtn.addEventListener('click',()=>{
 
 document.getElementById('generateBtn').addEventListener('click',()=>{
   generateTable();
-  exportBtn.classList.add('hidden');
+  document.getElementById('exportBtn').classList.add('hidden');
 });
-calculateBtn.addEventListener('click',()=>{
+document.getElementById('calculateBtn').addEventListener('click',()=>{
   calculateTimes();
-  exportBtn.classList.remove('hidden');
+  document.getElementById('exportBtn').classList.remove('hidden');
 });
-exportBtn.addEventListener('click',exportCSV);
+document.getElementById('exportBtn').addEventListener('click',exportCSV);
 
+/* ---------- PEOPLE ---------- */
 function getPeople(){
   const rows=document.querySelectorAll('.person-row');
   return Array.from(rows).map((row,idx)=>{
@@ -131,6 +183,7 @@ function getPeople(){
   });
 }
 
+/* ---------- TABLE GENERATION ---------- */
 function generateTable(){
   const container=document.getElementById('tableContainer');
   container.innerHTML='';
@@ -156,110 +209,119 @@ function generateTable(){
 
     const table=document.createElement('table');
     const header=document.createElement('tr');
-    header.innerHTML='<th>Step</th><th>Start</th><th>End</th><th>Lunch?</th><th>Pauses in Work</th><th>Note</th>';
+    header.innerHTML='<th>Start</th><th>End</th><th>Lunch?</th><th>Pauses</th><th>Note</th>';
     table.appendChild(header);
 
-    stepNames.forEach((stepLabel,sIndex)=>{
-      const row=document.createElement('tr');
-      row.innerHTML=`<td>${stepLabel}</td>
-        <td><input id="p${pIndex}s${sIndex}start" placeholder="8:00 M" /></td>
-        <td><input id="p${pIndex}s${sIndex}end" placeholder="10:00 M" /></td>
-        <td><input type="checkbox" id="p${pIndex}s${sIndex}lunch"></td>
-        <td><input id="p${pIndex}s${sIndex}break" placeholder="0:30" /></td>
-        <td><input id="p${pIndex}s${sIndex}note" class="noteInput" placeholder="" /></td>`;
-      table.appendChild(row);
-    });                                                                                                                              
+    const row=document.createElement('tr');
+    row.innerHTML=`
+      <td><input id="p${pIndex}start" placeholder="8:00 M" /></td>
+      <td><input id="p${pIndex}end" placeholder="4:30 M" /></td>
+      <td><input type="checkbox" id="p${pIndex}lunch"></td>
+      <td><input id="p${pIndex}break" placeholder="0:30" /></td>
+      <td><input id="p${pIndex}note" class="noteInput" placeholder="" /></td>`;
+    table.appendChild(row);
 
     block.appendChild(table);
     container.appendChild(block);
   });
 }
 
+/* ---------- CALCULATIONS ---------- */
 function calculateTimes(){
   const people=getPeople();
   let resultsHTML='';
   people.forEach((person,pIndex)=>{
-    let totalMinutes=0;
-    let html=`<h3>${person.name}${person.numbers? ` (Batteries: ${person.numbers})` : ''}</h3><table><tr><th>Step</th><th>Duration (hh:mm)</th></tr>`;
-    stepNames.forEach((stepLabel,sIndex)=>{
-      const startStr=(document.getElementById(`p${pIndex}s${sIndex}start`)?.value||'').trim();
-      const endStr=(document.getElementById(`p${pIndex}s${sIndex}end`)?.value||'').trim();
-      const breakStr=(document.getElementById(`p${pIndex}s${sIndex}break`)?.value||'0:00').trim();
-      const lunchChecked=document.getElementById(`p${pIndex}s${sIndex}lunch`)?.checked;
+    let html=`<h3>${person.name}${person.numbers? ` (Batteries: ${person.numbers})` : ''}</h3>`;
+    const startStr=(document.getElementById(`p${pIndex}start`)?.value||'').trim();
+    const endStr=(document.getElementById(`p${pIndex}end`)?.value||'').trim();
+    const breakStr=(document.getElementById(`p${pIndex}break`)?.value||'0:00').trim();
+    const lunchChecked=document.getElementById(`p${pIndex}lunch`)?.checked;
 
-      try{
-        let startObj=parseTimeWithDay(startStr);
-        let endObj=parseTimeWithDay(endStr);
-        let start=startObj.totalMinutes;
-        let end=endObj.totalMinutes;
+    try{
+      const startObj=parseTimeWithDay(startStr);
+      const endObj=parseTimeWithDay(endStr);
+
+      // Only error if same-day and end < start; allow week wrap (e.g., F -> M)
+      let daysDiff = endObj.dayIndex - startObj.dayIndex;
+      if (daysDiff < 0) daysDiff += 7;
+      if (daysDiff === 0 && endObj.totalMinutes < startObj.totalMinutes){
+        html+=`<table><tr style="color:red"><td>End before start</td></tr></table>`;
+      } else {
+        let duration = calculateShiftDuration(startObj, endObj);
         const breakTime=parseHourMinute(breakStr);
+        duration = Math.max(0, duration - breakTime);
+        if(lunchChecked) duration = Math.max(0, duration - 30);
 
-        if(end<start) html+=`<tr style="color:red"><td>${stepLabel}</td><td>End before start</td></tr>`;
-        else{
-          let duration=Math.max(0,end-start-breakTime);
-          if(lunchChecked) duration=Math.max(0,duration-30);
-          if(endObj.dayIndex>startObj.dayIndex) duration=Math.max(0,duration-930);
-          html+=`<tr><td>${stepLabel}</td><td>${formatHoursMinutes(duration)}</td></tr>`;
-          totalMinutes+=duration;
-        }
-      }catch(e){
-        html+=`<tr style="color:red"><td>${stepLabel}</td><td>${e}</td></tr>`;
+        html+=`<table><tr><th>Total (hh:mm)</th></tr><tr><td>${formatHoursMinutes(duration)}</td></tr></table>`;
       }
-    });
-    html+=`<tr><td><b>Total</b></td><td><b>${formatHoursMinutes(totalMinutes)}</b></td></tr></table>`;
+    }catch(e){
+      html+=`<table><tr style="color:red"><td>${e}</td></tr></table>`;
+    }
+
     resultsHTML+=html;
   });
   document.getElementById('results').innerHTML=resultsHTML;
   document.getElementById('resultsTitle').classList.remove('hidden');
 }
 
+/* ---------- CSV EXPORT (no lunch & no pauses columns) ---------- */
 function exportCSV(){
   const people=getPeople();
   let csv='';
   const titleText=document.getElementById('tableTitle').value.trim();
-  if(titleText) csv += `"${titleText}"\n\n`;
+  if(titleText) csv += csvField(titleText) + '\n\n';
 
-  // Header including Note column
-  csv += 'Worker,Batteries,Step,Start,End,Lunch?,Pauses in Work,Duration (hh:mm),Note\n';
+  // Header: Worker, Batteries, Start, End, Duration, Note
+  csv += [
+    'Worker','Batteries','Start','End','Duration (hh:mm)','Note'
+  ].map(csvField).join(',') + '\n';
 
   people.forEach((person,pIndex)=>{
-    let totalMinutes=0;
-    const batteries=`"${person.numbers}"`;
+    const startStr=(document.getElementById(`p${pIndex}start`)?.value||'').trim();
+    const endStr=(document.getElementById(`p${pIndex}end`)?.value||'').trim();
+    const breakStr=(document.getElementById(`p${pIndex}break`)?.value||'0:00').trim();
+    const lunchChecked=document.getElementById(`p${pIndex}lunch`)?.checked;
+    const noteStr=(document.getElementById(`p${pIndex}note`)?.value||'').trim();
 
-    stepNames.forEach((stepLabel,sIndex)=>{
-      const startStr=(document.getElementById(`p${pIndex}s${sIndex}start`)?.value||'').trim();
-      const endStr=(document.getElementById(`p${pIndex}s${sIndex}end`)?.value||'').trim();
-      const breakStr=(document.getElementById(`p${pIndex}s${sIndex}break`)?.value||'0:00').trim();
-      const lunchChecked=document.getElementById(`p${pIndex}s${sIndex}lunch`)?.checked;
-      const lunchValue=lunchChecked?'Yes':'No';
-      const noteStr=(document.getElementById(`p${pIndex}s${sIndex}note`)?.value||'').trim();
+    try{
+      const startObj=parseTimeWithDay(startStr);
+      const endObj=parseTimeWithDay(endStr);
 
-      try{
-        let startObj=parseTimeWithDay(startStr);
-        let endObj=parseTimeWithDay(endStr);
-        let start=startObj.totalMinutes;
-        let end=endObj.totalMinutes;
-        const breakTime=parseHourMinute(breakStr);
-        if(end<start) throw 'End before start';
-        let duration=Math.max(0,end-start-breakTime);
-        if(lunchChecked) duration=Math.max(0,duration-30);
-        if(endObj.dayIndex>startObj.dayIndex) duration=Math.max(0,duration-930);
-        totalMinutes += duration;
+      // Only error if same-day and end < start
+      let daysDiff = endObj.dayIndex - startObj.dayIndex;
+      if (daysDiff < 0) daysDiff += 7;
+      if (daysDiff === 0 && endObj.totalMinutes < startObj.totalMinutes) throw 'End before start';
 
-        csv+=[person.name,batteries,stepLabel,startStr,endStr,lunchValue,breakStr,formatHoursMinutes(duration),noteStr].join(',')+'\n';
-      } catch(e){
-        csv+=[person.name,batteries,stepLabel,startStr,endStr,lunchValue,breakStr,'ERROR',e].join(',')+'\n';
-      }
-    });
+      let duration = calculateShiftDuration(startObj, endObj);
+      const breakTime=parseHourMinute(breakStr);
+      duration = Math.max(0, duration - breakTime);
+      if(lunchChecked) duration = Math.max(0, duration - 30);
 
-    // Total row
-    csv+=[person.name,batteries,'Total','','','','',formatHoursMinutes(totalMinutes),''].join(',')+'\n';
+      const row = [
+        person.name,
+        person.numbers,
+        startStr,
+        endStr,
+        formatHoursMinutes(duration),
+        noteStr
+      ].map(csvField).join(',');
+      csv += row + '\n';
+    } catch(e){
+      const row = [
+        person.name,
+        person.numbers,
+        startStr,
+        endStr,
+        'ERROR',
+        e
+      ].map(csvField).join(',');
+      csv += row + '\n';
+    }
   });
 
   const blob=new Blob([csv],{type:'text/csv'});
   const link=document.createElement('a');
   link.href=URL.createObjectURL(blob);
-  // Use table title as filename, allow hyphens
   const filename = titleText
     ? `${titleText.replace(/[^a-z0-9_\- ]/gi,'')}.csv`
     : 'time_tracking.csv';
